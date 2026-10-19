@@ -1,0 +1,84 @@
+# Android / Gradle：构建产物与本地缓存
+.gradle/
+.kotlin/
+**/build/
+/out/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# 保留 Gradle Wrapper 的 JAR、脚本和配置，不忽略全部 JAR 文件
+
+# 本机 SDK、工具路径及个人配置
+local.properties
+*.local.properties
+/.tools/
+/.local-tools/
+/.gradle-user-home/
+
+# IDE 与编辑器的个人配置
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# 签名密钥、凭据和本地环境变量
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+signing.properties
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# 日志、临时文件和系统文件
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+hs_err_pid*
+replay_pid*
+
+# Python / Node 等本地辅助工具缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+.npm-cache/
+
+# PoC：实验脚本、原始响应、媒体及实验报告均只在本地保留
+/poc/
+
+# 内部资料不纳入公开仓库。
+/AGENTS.md
+/GOALS.md
+/PLANS.md
+/harness/
+/docs/
+/build-local.ps1
+/RELEASE.md
+
+# AI 工具的项目本地配置
+/.agents/
+/.codex/
+/.codex-remote-attachments/
+

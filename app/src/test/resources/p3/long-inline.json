@@ -1,0 +1,9 @@
+{
+  "idstr": "9007199254740993",
+  "isLongText": true,
+  "text": "摘要<a href=\"https://weibo.com/123/AbC123xyz\">全文</a>",
+  "longText": {
+    "longTextContent": "<p>完整长正文第一段</p><p>结尾核对标记 &lt;不会执行&gt;</p>"
+  },
+  "pic_num": 0
+}

@@ -1,0 +1,26 @@
+{
+  "idstr": "9007199254740993",
+  "text_raw": "自己的评论",
+  "pic_ids": [
+    "own-photo"
+  ],
+  "pic_infos": {
+    "own-photo": {
+      "large": {
+        "url": "https://wx1.sinaimg.cn/large/own.jpg"
+      }
+    }
+  },
+  "retweeted_status": {
+    "idstr": "1111111111111111",
+    "text_raw": "原帖",
+    "pics": [
+      {
+        "pid": "wrong-original",
+        "large": {
+          "url": "https://wx1.sinaimg.cn/large/wrong.jpg"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "idstr": "9007199254740993",
+  "mblogid": "AbC123xyz",
+  "text": "<p>第一段 &amp; 内容<br>第二行<img alt=\"[笑]\" src=\"https://invalid.test/image\"></p><p>末段</p>",
+  "isLongText": false,
+  "pic_num": 0,
+  "user": {
+    "idstr": "123",
+    "screen_name": "合成用户"
+  }
+}

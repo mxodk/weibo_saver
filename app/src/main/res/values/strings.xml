@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">微博下载器</string>
+    <string name="foundation_message">最小工程已建立，解析与保存功能尚未实现。</string>
+</resources>

@@ -1,0 +1,19 @@
+{
+  "idstr": "9007199254740993",
+  "text_raw": "我自己的转发评论",
+  "pic_num": 0,
+  "retweeted_status": {
+    "idstr": "1111111111111111",
+    "text_raw": "不得读取的原帖正文",
+    "pic_ids": [
+      "original-photo"
+    ],
+    "pic_infos": {
+      "original-photo": {
+        "large": {
+          "url": "https://wx1.sinaimg.cn/large/original.jpg"
+        }
+      }
+    }
+  }
+}
