@@ -29,14 +29,14 @@ class MediaProbe(context: Context, private val http: SafeHttpClient, cacheSubdir
     private val directory = File(context.cacheDir, cacheSubdir).apply { mkdirs() }
     // 仅清理本验证入口独占的临时文件，不触及相册或其他目录。
     fun clear() { directory.listFiles()?.filter { it.isFile }?.forEach { it.delete() } }
-    fun fetch(media: ProbeMedia, token: OperationToken, slow: Boolean = false, progress: (Long) -> Unit): FileEvidence {
+    fun fetch(media: ProbeMedia, token: OperationToken, slow: Boolean = false, byteLimit: Long = maxBytes, progress: (Long) -> Unit): FileEvidence {
         val candidate = media.candidate ?: throw ProbeFailure("RESOURCE", "此媒体暂无可用下载资源")
         val partial = File(directory, "${UUID.randomUUID()}.partial")
         try {
             http.open(candidate.url, RequestPurpose.MEDIA, token).use { response ->
                 val headerLength = response.headers["Content-Length"]?.toLongOrNull()?.takeIf { it >= 0 }
                 val expected = headerLength ?: candidate.declaredBytes.takeIf { it > 0 }
-                val (size, hash) = FileVerification.copy(if (slow) PacedInputStream(response.body, token) else response.body, partial, expected, token, progress, minOf(maxBytes,(directory.usableSpace / 3).coerceAtLeast(1)),timeoutMillis)
+                val (size, hash) = FileVerification.copy(if (slow) PacedInputStream(response.body, token) else response.body, partial, expected, token, progress, minOf(maxBytes, byteLimit, (directory.usableSpace / 3).coerceAtLeast(1)),timeoutMillis)
                 if (candidate.declaredBytes > 0 && candidate.declaredBytes != size)
                     throw ProbeFailure("INTEGRITY", "文件下载不完整，请重试")
                 val mime = FileVerification.sniff(partial)
@@ -44,7 +44,7 @@ class MediaProbe(context: Context, private val http: SafeHttpClient, cacheSubdir
                     throw ProbeFailure("FORMAT", "下载文件类型不符，请重新解析后重试")
                 val declaredMime = response.headers["Content-Type"].orEmpty().substringBefore(';').trim().lowercase()
                 if (declaredMime.isNotEmpty() && declaredMime != "application/octet-stream" &&
-                    declaredMime != mime && !(mime == "video/mp4" && declaredMime == "video/quicktime"))
+                    declaredMime != mime && !(mime in setOf("video/mp4", "video/quicktime") && declaredMime in setOf("video/mp4", "video/quicktime")))
                     throw ProbeFailure("FORMAT", "下载文件格式异常，请重试")
                 val dimensions: Pair<Int, Int>
                 var duration: Long? = null

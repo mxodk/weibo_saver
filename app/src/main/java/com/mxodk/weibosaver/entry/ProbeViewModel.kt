@@ -16,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import com.mxodk.weibosaver.BuildConfig
 import com.mxodk.weibosaver.core.SafeHttpClient
 import com.mxodk.weibosaver.download.DownloadCoordinator
+import com.mxodk.weibosaver.model.MediaKind
 import com.mxodk.weibosaver.model.ProbeFailure
 import com.mxodk.weibosaver.ui.*
 import com.mxodk.weibosaver.weibo.*
@@ -119,13 +120,20 @@ class ProbeViewModel(application: Application): AndroidViewModel(application) {
         mutableAppearance.value=value
         preferences.edit().putString("mode",value.name).apply()
     }
-    fun save(choice: SaveChoice) {
+    fun save(choice: SaveChoice, stillOnlyId: String? = null) {
         if(folderBusy.value) throw ProbeFailure("FOLDER","请等待文件夹授权完成")
         folder.value.treeUri?.let {if(!FolderAccess.hasWrite(getApplication(),it)) throw ProbeFailure("FOLDER","保存目录授权已失效，请重新选择")}
         val current=reader.value
         if(current.parse.requestId!=controller.state.value.requestId || controller.state.value.busy || controller.state.value.post==null)
             throw ProbeFailure("INPUT","解析结果已变化，请等待最新结果")
-        startSaving(current.snapshot(choice).copy(albumDirectory=AlbumDirectory.DEFAULT,folder=folder.value),false)
+        val snapshot = if (stillOnlyId == null) current.snapshot(choice) else {
+            val media = current.parse.post?.media?.singleOrNull {
+                it.id == stillOnlyId && it.kind == MediaKind.LIVE_PHOTO && it.candidate != null
+            } ?: throw ProbeFailure("INPUT", "没有可保存的静态图片")
+            SaveSnapshot(current.parse.requestId, requireNotNull(current.parse.post).id, SaveChoice.SELECTED,
+                listOf(media), stillOnlyIds = setOf(media.id))
+        }
+        startSaving(snapshot.copy(albumDirectory=AlbumDirectory.DEFAULT,folder=folder.value),false)
     }
     fun retryFailed() {
         if(folderBusy.value) throw ProbeFailure("FOLDER","请等待文件夹授权完成")

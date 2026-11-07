@@ -25,7 +25,7 @@ data class DownloadState(val ready: Boolean=false,val active: Boolean=false,val 
             if(cancelled>0) "批次已取消" else "批次已结束"
         } else processingHint
         val stages=current.joinToString("；") {(i,item)->
-            "第 ${i+1}/${items.size} 项 · ${if(item.kind==MediaKind.VIDEO) "视频" else "图片"} · ${item.status}"+
+            "第 ${i+1}/${items.size} 项 · ${when (item.kind) { MediaKind.VIDEO -> "视频"; MediaKind.LIVE_PHOTO -> "实况"; MediaKind.IMAGE -> "图片" }} · ${item.status}"+
                 if(item.status=="传输中" && item.bytes>0) " ${item.bytes/1024} KiB" else ""
         }
         return "$stages；等待 ${items.count {it.status=="排队"}} 项"

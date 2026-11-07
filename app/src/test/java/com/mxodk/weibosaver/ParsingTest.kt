@@ -129,6 +129,33 @@ class ParsingTest {
         val extra=parser.parse(json("""{"idstr":"9007199254740993","text_raw":"未取得完整正文的摘要"}"""),ref)
         assertEquals(BodyStatus.TRUNCATED,parser.supplement(primary,extra).bodyStatus)
     }
+    @Test fun livePhotosRejectSharedHdTargetAndKeepUniqueMotion() {
+        val parser = PostParser()
+        val post = parser.parse(json("""{"idstr":"9007199254740993","text_raw":"fixture","pics":[
+          {"pid":"first","type":"livephoto","video_hd":"https://video.weibo.com/media/play?livephoto=https%3A%2F%2Flivephoto.us.sinaimg.cn%2Fshared.mov&sig=one","video":"https://video.weibo.com/media/play?livephoto=one"},
+          {"pid":"second","type":"livephoto","video_hd":"https://video.weibo.com/media/play?livephoto=https%3A%2F%2Flivephoto.us.sinaimg.cn%2Fshared.mov&sig=two","video":"https://video.weibo.com/media/play?livephoto=two"},
+          {"pid":"third","type":"livephoto","video_hd":"https://video.weibo.com/media/play?livephoto=https%3A%2F%2Flivephoto.us.sinaimg.cn%2Fshared.mov&sig=three","video":"https://video.weibo.com/media/play?livephoto=three"}]}"""), ref)
+
+        assertEquals(listOf("first", "second", "third"), post.media.map { it.id })
+        assertEquals(listOf("one", "two", "three"), post.media.map { it.liveMotion?.url?.substringAfter("livephoto=") })
+    }
+
+    @Test fun supplementRechecksMotionOwnershipAcrossSources() {
+        val parser = PostParser()
+        val primary = parser.parse(json("""{"idstr":"9007199254740993","text_raw":"fixture","pics":[
+          {"pid":"first","type":"livephoto","video":"https://video.weibo.com/media/play?livephoto=shared"},
+          {"pid":"second","type":"livephoto"}]}"""), ref)
+        val mobile = parser.parse(json("""{"idstr":"9007199254740993","text_raw":"fixture","pics":[
+          {"pid":"second","type":"livephoto","videoSrc":"https://video.weibo.com/media/play?livephoto=shared"},
+          {"pid":"first","type":"livephoto","videoSrc":"https://video.weibo.com/media/play?livephoto=first"}]}"""), ref, "mobile")
+        val merged = parser.supplement(primary, mobile)
+
+        assertEquals(listOf("first", "second"), merged.media.map { it.id })
+        assertTrue(merged.media.first().liveMotion!!.url.endsWith("livephoto=first"))
+        assertNull(merged.media.last().liveMotion)
+        assertEquals(listOf("second"), merged.issues.filter { it.code == "LIVE_MOTION_MISSING" }.map { it.mediaId })
+    }
+
     @Test fun livePhotoMotionIsAssociatedWithSameItemAndNotCountedAsVideo() {
         val post=PostParser().parse(json("""{"idstr":"9007199254740993","text_raw":"x","pics":[{"pid":"live","type":"livephoto","large":{"url":"https://wx1.sinaimg.cn/large/live.jpg"},"videoSrc":"https://video.weibo.com/media/play?livephoto=synthetic&sig=keep"}]}"""),ref)
         assertEquals(1,post.media.size); assertEquals(MediaKind.LIVE_PHOTO,post.media.single().kind)

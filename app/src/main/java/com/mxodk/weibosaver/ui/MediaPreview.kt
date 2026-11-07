@@ -74,7 +74,7 @@ fun NetworkImage(url: String?, vm: ProbeViewModel, full: Boolean, modifier: Modi
 }
 
 @Composable
-fun PreviewDialog(vm: ProbeViewModel, state: ReaderState) {
+fun PreviewDialog(vm: ProbeViewModel, state: ReaderState, saveStill: (String) -> Unit) {
     val post = state.parse.post ?: return
     val index = post.media.indexOfFirst { it.id == state.previewId }
     if(index < 0) return
@@ -113,7 +113,12 @@ fun PreviewDialog(vm: ProbeViewModel, state: ReaderState) {
                     if(item.kind==MediaKind.VIDEO) VideoPreview(item,vm,Modifier.fillMaxSize(),visible=page==pager.currentPage && !pager.isScrollInProgress)
                     else ZoomableImage(item,vm,current=page==pager.currentPage,onZoomChanged={if(page==pager.currentPage) zoomed=it})
                 }
-                if(media.kind == MediaKind.LIVE_PHOTO) Text("Live Photo · 仅静态图片",color=MaterialTheme.colorScheme.primary)
+                if (media.kind == MediaKind.LIVE_PHOTO) {
+                    Text("实况照片 · 当前预览静态画面", color = MaterialTheme.colorScheme.primary)
+                    TextButton(onClick = { saveStill(media.id) }, enabled = media.candidate != null) {
+                        Text("仅保存静态图片")
+                    }
+                }
                 if(post.media.size>1 && (zoomed || showSwipeHint)) Text(if(zoomed) "还原缩放后可切换" else "左右滑动切换",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

@@ -147,22 +147,32 @@ class DownloadCoordinator private constructor(private val context: Context) {
                                     currentToken.check();probe.clear()
                                     if(media.candidate==null) throw ProbeFailure("RESOURCE_CHANGED","原媒体已移除、类型改变或质量不足，未用其他项替换")
                                     update("传输中")
-                                    val evidence=probe.fetch(media,currentToken) {bytes->update("传输中",bytes)}
-                                    file=evidence.file;update("核验中",bytes=evidence.bytes,evidence=evidence.report())
-                                    val receipt=transaction.save(SaveAsset(evidence.file,evidence.mime,evidence.bytes,evidence.sha256),currentToken,currentGate,
+                                    val isLive = media.kind == MediaKind.LIVE_PHOTO && media.id !in pending.source.stillOnlyIds
+                                    val asset = if (isLive) {
+                                        if (pending.source.folder.treeUri != null)
+                                            throw ProbeFailure("LIVE_FOLDER", "实况照片请保存到默认相册，或在预览中单独保存静态图片")
+                                        LivePhotoSave.prepare(media, probe, currentToken) { status, bytes -> update(status, bytes) }
+                                    } else {
+                                        val evidence = probe.fetch(media, currentToken) { bytes -> update("传输中", bytes) }
+                                        update("核验中", bytes = evidence.bytes, evidence = evidence.report())
+                                        SaveAsset(evidence.file, evidence.mime, evidence.bytes, evidence.sha256)
+                                    }
+                                    file = asset.file
+                                    val detail = if (!isLive && media.kind == MediaKind.LIVE_PHOTO) "仅保存了静态图片" else null
+                                    val receipt=transaction.save(asset,currentToken,currentGate,
                                         FaultPoint.NONE,{stage->when {
-                                            stage.startsWith("已发布并确认：")->update("成功",uri=stage.substringAfter('：'))
+                                            stage.startsWith("已发布并确认：")->update("成功",uri=stage.substringAfter('：'),detail=detail)
                                             stage=="提交媒体库发布"->update("发布中")
                                             else->update("写入中")
                                         }},{},AlbumDirectory.DEFAULT,pending.source.folder.treeUri)
-                                    update("成功",uri=receipt.uri)
+                                    update("成功",uri=receipt.uri,detail=detail)
                                 } catch(cancelled: CancellationException) {
                                     if(state.value.items[index].status!="成功") update("取消")
                                     throw cancelled
                                 } catch(error: Exception) {
                                     currentToken.check()
                                     update("失败",detail=failureText(error));event("第 ${index+1} 项失败：${failureText(error)}")
-                                } finally {file?.delete()}
+                                } finally {file?.delete(); probe.clear()}
                                 assigned=following
                             }
                         } finally {probe.clear()}

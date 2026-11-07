@@ -7,7 +7,7 @@ enum class Appearance(val label: String) { SYSTEM("跟随系统"), LIGHT("浅色
 enum class SaveChoice { ALL, SELECTED }
 // URI 仅供目录授权和后续写入，不输出到诊断；快照保留原目录身份。
 data class SaveFolder(val treeUri: String? = null, val displayName: String = "默认相册")
-data class SaveSnapshot(val requestId: Long, val postId: String, val choice: SaveChoice, val media: List<ProbeMedia>, val albumDirectory: String = AlbumDirectory.DEFAULT, val folder: SaveFolder = SaveFolder())
+data class SaveSnapshot(val requestId: Long, val postId: String, val choice: SaveChoice, val media: List<ProbeMedia>, val albumDirectory: String = AlbumDirectory.DEFAULT, val folder: SaveFolder = SaveFolder(), val stillOnlyIds: Set<String> = emptySet())
 
 fun retainedFolderUris(current: SaveFolder, snapshot: SaveSnapshot?): Set<String> =
     listOfNotNull(current.treeUri,snapshot?.folder?.treeUri).toSet()

@@ -121,6 +121,8 @@ fun DownloadSheet(batch: DownloadState, onDismiss: ()->Unit, onStop: ()->Unit, o
                 Text("保存进度",fontSize=20.sp,fontWeight=FontWeight.SemiBold)
 
                 Text("完成 ${batch.done} · 失败 ${batch.failed} · 取消 ${batch.cancelled}")
+                val stillCount = batch.items.count { it.status == "成功" && it.id in batch.snapshot?.stillOnlyIds.orEmpty() }
+                if (stillCount > 0) Text("其中 $stillCount 项仅保存静态图片", style = MaterialTheme.typography.bodySmall)
                 Text("已处理 ${batch.processed}/${batch.items.size} · ${batch.percent}%",fontWeight=FontWeight.Medium)
                 LinearProgressIndicator(progress={batch.progress},modifier=Modifier.fillMaxWidth())
                 Text(batch.processingText,style=MaterialTheme.typography.bodySmall,minLines=2,maxLines=2,overflow=TextOverflow.Ellipsis)
@@ -138,7 +140,7 @@ fun DownloadSheet(batch: DownloadState, onDismiss: ()->Unit, onStop: ()->Unit, o
                 LazyColumn(Modifier.weight(1f,false).fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(4.dp),contentPadding=PaddingValues(bottom=12.dp)) {
                     batch.items.forEachIndexed {index,item -> if(item.status=="失败") item(key=item.id) {
                         Surface(color=MaterialTheme.colorScheme.errorContainer,shape=MaterialTheme.shapes.small) {
-                            Text("第 ${index+1} 项 · ${if(item.kind==MediaKind.VIDEO) "视频" else "图片"} · ${item.detail}",
+                            Text("第 ${index+1} 项 · ${when (item.kind) { MediaKind.VIDEO -> "视频"; MediaKind.LIVE_PHOTO -> "实况"; MediaKind.IMAGE -> "图片" }} · ${item.detail}",
                                 Modifier.fillMaxWidth().padding(8.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onErrorContainer)
                         }
                     } }

@@ -61,6 +61,25 @@ class ProbeTest {
         val merged = PostParser().supplement(original, extra)
         assertEquals(listOf(a,b), merged.media.map { it.candidate })
     }
+    @Test fun missingLiveMotionIsSupplementedOnlyBySameMediaId() {
+        val primary = json("""{"idstr":"9007199254740993","text_raw":"fixture","pics":[
+          {"pid":"a","type":"livephoto","large":{"url":"https://wx1.sinaimg.cn/large/a.jpg"}}]}""")
+        val mobile = json("""{"data":{"idstr":"9007199254740993","text_raw":"fixture","pics":[
+          {"pid":"b","type":"livephoto","videoSrc":"https://video.weibo.com/media/play?livephoto=wrong"},
+          {"pid":"a","type":"livephoto","videoSrc":"https://video.weibo.com/media/play?livephoto=right&sig=keep"}]}}""")
+        val gateway = object : PostGateway {
+            override fun createVisitor(token: OperationToken) = emptyMap<String, String>()
+            override fun desktop(reference: PostReference, session: Map<String, String>, token: OperationToken) = primary
+            override fun mobile(reference: PostReference, token: OperationToken) = mobile
+        }
+        val post = PostRepository(gateway).fetch(ref, OperationToken())
+        val live = post.media.first()
+        assertEquals("a", live.id)
+        assertEquals(MediaKind.LIVE_PHOTO, live.kind)
+        assertTrue(live.liveMotion!!.url.endsWith("livephoto=right&sig=keep"))
+        assertFalse(post.issues.any { it.code == "LIVE_MOTION_MISSING" && it.mediaId == "a" })
+    }
+
     private class FakeGateway(val response: () -> JsonObject): PostGateway {
         var visitors = 0; var requests = 0; var mobileRequests = 0
         override fun createVisitor(token: OperationToken): Map<String,String> { visitors++; return mapOf("SUB" to "synthetic") }

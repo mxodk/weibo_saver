@@ -29,6 +29,39 @@ object JsonPayload {
 }
 
 class PostParser {
+    private fun motionKey(resource: ResourceCandidate): String {
+        val url = checkNotNull(resource.url.toHttpUrlOrNull())
+        // 播放入口的签名可以不同，内部动态文件相同仍视为同一候选。
+        val target = url.takeIf { it.host == "video.weibo.com" && it.encodedPath == "/media/play" }
+            ?.queryParameter("livephoto")
+        val file = target?.toHttpUrlOrNull()
+        return when {
+            file != null -> file.host + file.encodedPath
+            target != null -> url.host + url.encodedPath + ":" + target.substringBefore('?')
+            else -> url.host + url.encodedPath
+        }
+    }
+
+    private fun selectLiveMotion(media: Collection<ProbeMedia>, candidates: Map<String, List<ResourceCandidate>>): List<ProbeMedia> {
+        val owners = mutableMapOf<String, String>()
+        val shared = mutableSetOf<String>()
+        candidates.forEach { (id, resources) ->
+            resources.forEach { resource ->
+                val key = motionKey(resource)
+                val previous = owners.putIfAbsent(key, id)
+                if (previous != null && previous != id) shared.add(key)
+            }
+        }
+        return media.map { item ->
+            if (item.kind != MediaKind.LIVE_PHOTO) item
+            else item.copy(liveMotion = candidates[item.id]?.firstOrNull { motionKey(it) !in shared })
+        }
+    }
+
+    private fun missingLiveMotion(media: List<ProbeMedia>) = media
+        .filter { it.kind == MediaKind.LIVE_PHOTO && it.liveMotion == null }
+        .map { ParseIssue(IssueScope.ITEM, "LIVE_MOTION_MISSING", "实况照片暂无可确认的动态资源，可单独保存静态图片", it.id) }
+
     private fun flag(status: JsonObject, key: String) = status.str(key) in setOf("true","1")
     fun parse(payload: JsonObject, reference: PostReference, origin: String = "desktop"): ProbePost {
         if (payload.str("ok") == "0") throw ProbeFailure("ACCESS","帖子暂时无法访问，请稍后重试")
@@ -63,6 +96,7 @@ class PostParser {
         if (bodyStatus == BodyStatus.TRUNCATED) issue(IssueScope.BODY,"BODY_TRUNCATED","正文可能截断，尚未取得可确认的全文字段")
         if (bodyStatus == BodyStatus.MISSING) issue(IssueScope.BODY,"BODY_MISSING","当前帖正文缺字段，未借用被转发帖正文")
         val result = linkedMapOf<String,ProbeMedia>()
+        val motionCandidates = mutableMapOf<String, List<ResourceCandidate>>()
         fun resource(rawUrl: String, source: String, width: Int = 0, height: Int = 0): ResourceCandidate? {
             val url = rawUrl.toHttpUrlOrNull() ?: return null
             if (runCatching { AddressPolicy.validate(url,RequestPurpose.MEDIA) }.isFailure) {
@@ -96,11 +130,12 @@ class PostParser {
             val preview = listOf("thumbnail","bmiddle").firstNotNullOfOrNull { key ->
                 resource(data.obj(key).str("url"),"$origin.$path.$key")
             }
-            val motion = if (live) listOf("video_hd","video","videoSrc").firstNotNullOfOrNull { key ->
-                resource(data.str(key),"$origin.$path.$key")
-            } else null
-            if (live) issue(IssueScope.ITEM,"STATIC_ONLY","Live Photo $mediaId 仅支持静态保存，动态部分不另计视频",mediaId)
-            put(ProbeMedia(mediaId,if (live) MediaKind.LIVE_PHOTO else MediaKind.IMAGE,best,preview,motion))
+            if (live && mediaId !in result) {
+                motionCandidates[mediaId] = listOf("video_hd", "video", "videoSrc").mapNotNull { key ->
+                    resource(data.str(key), "$origin.$path.$key")
+                }
+            }
+            put(ProbeMedia(mediaId, if (live) MediaKind.LIVE_PHOTO else MediaKind.IMAGE, best, preview))
         }
         fun addVideo(data: JsonObject, fallbackId: String, path: String) {
             val info = data.obj("media_info")
@@ -174,11 +209,13 @@ class PostParser {
             issues.any { it.scope == IssueScope.MEDIA } -> MediaListStatus.PARTIAL
             else -> MediaListStatus.COMPLETE
         }
+        val media = selectLiveMotion(result.values, motionCandidates)
+        issues += missingLiveMotion(media)
         val user = status.obj("user")
         val author = if (user.isNotEmpty()) PostAuthor(user.str("idstr").ifBlank { user.str("id") },user.str("screen_name")) else null
         // 仅读当前对象；retweeted_status 的正文、媒体、用户和长文都不读取。
-        return ProbePost(id,result.values.toList(),issues.map { it.message }.distinct(),
-            mediaStatus != MediaListStatus.COMPLETE || result.values.any { it.candidate == null },expected,text,
+        return ProbePost(id,media,issues.map { it.message }.distinct(),
+            mediaStatus != MediaListStatus.COMPLETE || media.any { it.candidate == null } || issues.any { it.code == "LIVE_MOTION_MISSING" },expected,text,
             bodyStatus,mediaStatus,order,author,status["retweeted_status"] is JsonObject,issues)
     }
 
@@ -194,16 +231,22 @@ class PostParser {
                 kind=if (old.kind == MediaKind.LIVE_PHOTO || other!!.kind == MediaKind.LIVE_PHOTO) MediaKind.LIVE_PHOTO else old.kind)
         }
         val added = extra.media.filter { e -> primary.media.none { it.id == e.id } }
-        val all = merged + added
+        val combined = merged + added
+        val motion = combined.filter { it.kind == MediaKind.LIVE_PHOTO }.associate { item ->
+            item.id to listOfNotNull(item.liveMotion, extras[item.id]?.liveMotion)
+        }
+        val all = selectLiveMotion(combined, motion)
         val expected = maxOf(primary.expectedImages,extra.expectedImages)
         val useExtraBody = primary.bodyStatus != BodyStatus.COMPLETE && extra.bodyStatus == BodyStatus.COMPLETE && (primary.bodyStatus == BodyStatus.MISSING || extra.text.length > primary.text.length)
         val body = if (useExtraBody) extra else primary
         val issues = (primary.issues + extra.issues).distinct().filterNot { issue ->
             (issue.scope == IssueScope.BODY && body.bodyStatus == BodyStatus.COMPLETE) ||
             (issue.code == "CANDIDATE_MISSING" && all.any { it.id == issue.mediaId && it.candidate != null }) ||
+            issue.code == "LIVE_MOTION_MISSING" ||
             (issue.code == "COUNT_MISMATCH" && all.count { it.kind != MediaKind.VIDEO } >= expected) ||
             (issue.code == "MEDIA_UNKNOWN" && extra.mediaStatus != MediaListStatus.UNKNOWN)
         }.toMutableList()
+        issues += missingLiveMotion(all)
         if (added.isNotEmpty()) issues += ParseIssue(IssueScope.ORDER,"ORDER_UNPROVEN","补充了经当前帖身份核对的媒体；跨来源相对顺序无法证明")
         primary.media.filter { old -> extras[old.id]?.let { e -> e.kind != old.kind && setOf(e.kind,old.kind) != setOf(MediaKind.IMAGE,MediaKind.LIVE_PHOTO) } == true }
             .forEach { issues += ParseIssue(IssueScope.ITEM,"TYPE_CONFLICT","部分媒体类型无法确认",it.id) }
@@ -215,6 +258,6 @@ class PostParser {
         return primary.copy(media=all,text=body.text,bodyStatus=body.bodyStatus,mediaStatus=mediaStatus,
             order=if (added.isNotEmpty()) MediaOrder.UNPROVEN else primary.order,
             expectedImages=expected,issues=issues.distinct(),warnings=issues.map{it.message}.distinct(),
-            needsSupplement=mediaStatus != MediaListStatus.COMPLETE || all.any { it.candidate == null })
+            needsSupplement=mediaStatus != MediaListStatus.COMPLETE || all.any { it.candidate == null } || issues.any { it.code == "LIVE_MOTION_MISSING" })
     }
 }

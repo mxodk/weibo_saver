@@ -13,8 +13,19 @@ android {
         // Android 12 是最低支持目标，不能随编译 SDK 升级而提高。
         minSdk = 31
         targetSdk = 36
-        versionCode = 18
-        versionName = "1.0.0"
+        versionCode = 19
+        versionName = "1.1.0"
+        manifestPlaceholders["appLabel"] = "@string/app_name"
+    }
+    buildTypes {
+        debug {
+            // P8 验收包单独安装，避免与正式签名版本冲突。
+            if (providers.gradleProperty("p8TestApk").orNull == "true") {
+                applicationIdSuffix = ".p8test"
+                versionNameSuffix = "-p8-test-r5"
+                manifestPlaceholders["appLabel"] = "微博下载器 P8 测试"
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

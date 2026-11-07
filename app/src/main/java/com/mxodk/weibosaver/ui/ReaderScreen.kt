@@ -101,9 +101,10 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
     fun retry() {
         try {vm.retryFailed()} catch(error: ProbeFailure) {scope.launch {snack.showSnackbar(error.message)}}
     }
-    fun save(choice: SaveChoice) {
+    fun save(choice: SaveChoice, stillOnlyId: String? = null) {
         try {
-            vm.save(choice);showSheet=false
+            vm.save(choice, stillOnlyId);showSheet=false
+            if (stillOnlyId != null) vm.preview(null)
             if(Build.VERSION.SDK_INT>=33 && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
                 notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -139,7 +140,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
                     Column(Modifier.navigationBarsPadding()) {
                         if(batch.snapshot != null) TaskSummary(batch,onOpen={showSheet=true})
                         state.parse.post?.takeIf { it.media.isNotEmpty() }?.let { post ->
-                            SaveActions(vm,state,batch,post,onSave=::save)
+                            SaveActions(vm,state,batch,post,onSave={ save(it) })
                         }
                     }
                 }
@@ -195,7 +196,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
                         })
                         if(post.mediaStatus != MediaListStatus.COMPLETE) Notice("部分媒体未能获取")
                         if(post.order == MediaOrder.UNPROVEN) Notice("媒体顺序可能与原帖不同")
-                        post.issues.filter { it.scope in setOf(IssueScope.ITEM,IssueScope.ACCESS) && it.code != "STATIC_ONLY" }
+                        post.issues.filter { it.scope in setOf(IssueScope.ITEM,IssueScope.ACCESS) }
                             .distinctBy { it.message }.forEach { Notice(it.message) }
                         if(post.media.isEmpty()) Text(if(post.mediaStatus == MediaListStatus.COMPLETE) "此帖没有图片或视频" else "未能获取媒体列表",
                             style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -231,7 +232,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
         if(BuildConfig.DEBUG && showReport) AlertDialog(onDismissRequest={showReport=false},title={Text("验证信息")},text={Text("解析、预览和保存均使用真实资源。保存结果以发布完成为准；可复制脱敏诊断反馈问题。")},
             confirmButton={TextButton(onClick={copyText(vm.report());showReport=false}) {Text("复制诊断")}},dismissButton={TextButton(onClick={showReport=false}) {Text("关闭")}})
         if(showSheet && batch.snapshot != null) DownloadSheet(batch,onDismiss={showSheet=false},onStop=vm::stopSaving,onRetry=::retry)
-        if(state.previewId != null) PreviewDialog(vm,state)
+        if(state.previewId != null) PreviewDialog(vm,state) { id -> save(SaveChoice.SELECTED, id) }
     }
 }
 
@@ -285,7 +286,7 @@ private fun MediaTile(vm: ProbeViewModel, media: ProbeMedia, selected: Boolean, 
                 }
             }
         }
-        Text(when(media.kind) {MediaKind.IMAGE -> "图片";MediaKind.VIDEO -> "视频";MediaKind.LIVE_PHOTO -> "实况 · 仅静态"},
+        Text(when(media.kind) {MediaKind.IMAGE -> "图片";MediaKind.VIDEO -> "视频";MediaKind.LIVE_PHOTO -> if (media.liveMotion == null) "实况 · 缺动态" else "实况"},
             fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
         media.durationSeconds?.let { seconds -> Text("${seconds / 60}:${(seconds % 60).toString().padStart(2,'0')}",fontSize=11.sp) }
         if(media.candidate == null) Text("暂不可保存",fontSize=11.sp,color=MaterialTheme.colorScheme.error)
