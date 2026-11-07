@@ -62,6 +62,8 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
     val appearance by vm.appearance.collectAsStateWithLifecycle()
     val state by vm.reader.collectAsStateWithLifecycle()
     val batch by vm.downloads.collectAsStateWithLifecycle()
+    val hiddenBatch by vm.hiddenDownloadBatch.collectAsStateWithLifecycle()
+    val showSummary = batch.snapshot != null && (batch.active || batch.batch != hiddenBatch)
     val notificationEntry by vm.notificationEntry.collectAsStateWithLifecycle()
     var showSettings by rememberSaveable { mutableStateOf(false) }
     val album by vm.albumDirectory.collectAsStateWithLifecycle()
@@ -71,7 +73,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
     var inputFocused by remember {mutableStateOf(false)}
     var inputBounds by remember {mutableStateOf<Rect?>(null)}
     val drag=rememberDragSelection(state.parse.requestId,state.selected,listState,vm::setSelected)
-    var showSheet by rememberSaveable { mutableStateOf(false) }
+    var detailsBatch by rememberSaveable { mutableStateOf<String?>(null) }
     var showReport by rememberSaveable { mutableStateOf(false) }
     val snack=remember { SnackbarHostState() }
     val scope=rememberCoroutineScope()
@@ -85,7 +87,8 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
         if(request.matches(batch.batch,batch.snapshot!=null)) {
             showSettings=false;showReport=false
             vm.preview(null);focusManager.clearFocus(force=true);keyboard?.hide()
-            showSheet=true
+            vm.revealDownloadSummary()
+            detailsBatch=null
         } else snack.showSnackbar("该批次记录已不可用，可查看当前保存状态")
         vm.consumeNotification(request.sequence)
     }
@@ -94,6 +97,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
         scope.launch { snack.showSnackbar("已复制") }
     }
     fun parse() {
+        detailsBatch=null
         focusManager.clearFocus(force=true)
         keyboard?.hide()
         vm.fetch()
@@ -103,7 +107,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
     }
     fun save(choice: SaveChoice, stillOnlyId: String? = null) {
         try {
-            vm.save(choice, stillOnlyId);showSheet=false
+            vm.save(choice, stillOnlyId);detailsBatch=null
             if (stillOnlyId != null) vm.preview(null)
             if(Build.VERSION.SDK_INT>=33 && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
                 notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -138,7 +142,10 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
             bottomBar={
                 Surface(color=MaterialTheme.colorScheme.surface,shadowElevation=6.dp) {
                     Column(Modifier.navigationBarsPadding()) {
-                        if(batch.snapshot != null) TaskSummary(batch,onOpen={showSheet=true})
+                        if(showSummary) TaskSummary(batch,
+                            previousPost=batch.snapshot?.requestId != state.parse.requestId,
+                            onDetails={detailsBatch=batch.batch},onStop=vm::stopSaving,
+                            onRetry=::retry,onDismiss=vm::dismissDownloadSummary)
                         state.parse.post?.takeIf { it.media.isNotEmpty() }?.let { post ->
                             SaveActions(vm,state,batch,post,onSave={ save(it) })
                         }
@@ -181,7 +188,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
                                 Text(post.author?.name?.ifEmpty { "当前帖子" } ?: "当前帖子",fontWeight=FontWeight.SemiBold)
                                 if(post.isRepost) Text("转发帖",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            TextButton(onClick={copyText(post.text)},enabled=post.text.isNotEmpty()) { Text("复制正文") }
+                            OutlinedButton(onClick={copyText(post.text)},enabled=post.text.isNotEmpty()) { Text("复制正文") }
                         }
                         var expanded by rememberSaveable(state.parse.requestId) { mutableStateOf(false) }
                         var overflowing by remember(state.parse.requestId) { mutableStateOf(false) }
@@ -189,15 +196,6 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
                             maxLines=if(expanded) Int.MAX_VALUE else 10,overflow=TextOverflow.Ellipsis,
                             onTextLayout={if(!expanded) overflowing=it.hasVisualOverflow}) }
                         if(expanded || overflowing) TextButton(onClick={expanded=!expanded}) { Text(if(expanded) "收起正文" else "展开正文") }
-                        if(post.bodyStatus != BodyStatus.COMPLETE && post.text.isNotEmpty()) Notice(when(post.bodyStatus) {
-                            BodyStatus.TRUNCATED -> "正文可能不完整"
-                            BodyStatus.MISSING -> "未获取到正文"
-                            else -> "正文可能不完整"
-                        })
-                        if(post.mediaStatus != MediaListStatus.COMPLETE) Notice("部分媒体未能获取")
-                        if(post.order == MediaOrder.UNPROVEN) Notice("媒体顺序可能与原帖不同")
-                        post.issues.filter { it.scope in setOf(IssueScope.ITEM,IssueScope.ACCESS) }
-                            .distinctBy { it.message }.forEach { Notice(it.message) }
                         if(post.media.isEmpty()) Text(if(post.mediaStatus == MediaListStatus.COMPLETE) "此帖没有图片或视频" else "未能获取媒体列表",
                             style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                         else {
@@ -231,7 +229,7 @@ fun ReaderApp(vm: ProbeViewModel = viewModel()) {
         if(!batch.ready) LaunchedEffect(batch.message) {snack.showSnackbar(batch.message)}
         if(BuildConfig.DEBUG && showReport) AlertDialog(onDismissRequest={showReport=false},title={Text("验证信息")},text={Text("解析、预览和保存均使用真实资源。保存结果以发布完成为准；可复制脱敏诊断反馈问题。")},
             confirmButton={TextButton(onClick={copyText(vm.report());showReport=false}) {Text("复制诊断")}},dismissButton={TextButton(onClick={showReport=false}) {Text("关闭")}})
-        if(showSheet && batch.snapshot != null) DownloadSheet(batch,onDismiss={showSheet=false},onStop=vm::stopSaving,onRetry=::retry)
+        if(detailsBatch == batch.batch && showSummary && batch.failed > 0) DownloadSheet(batch,onDismiss={detailsBatch=null},onRetry=::retry)
         if(state.previewId != null) PreviewDialog(vm,state) { id -> save(SaveChoice.SELECTED, id) }
     }
 }
@@ -257,11 +255,6 @@ private fun InputCard(vm: ProbeViewModel, state: ReaderState, onParse: ()->Unit,
             Button(onClick=onParse,enabled=!state.parse.busy || state.parse.input != state.parse.requestInput) {Text("解析")}
         }
     }
-}
-
-@Composable
-private fun Notice(text: String) {
-    Text(text,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable

@@ -9,7 +9,15 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -19,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -55,13 +64,15 @@ private fun lifecycleStarted(): Boolean {
 }
 
 @Composable
-fun NetworkImage(url: String?, vm: ProbeViewModel, full: Boolean, modifier: Modifier = Modifier) {
+fun NetworkImage(url: String?, vm: ProbeViewModel, full: Boolean, modifier: Modifier = Modifier,
+                 onImageSize: (Int, Int) -> Unit = { _, _ -> }) {
     var attempt by remember(url) { mutableIntStateOf(0) }
     val context = LocalContext.current
     if(!lifecycleStarted()) { Box(modifier);return }
     if (url == null) Box(modifier,contentAlignment=Alignment.Center) { Text("暂无预览",style=MaterialTheme.typography.labelSmall) }
     else key(url,attempt) {
         SubcomposeAsyncImage(model=ImageRequest.Builder(context).data(url).size(if(full) 2048 else 384).build(),
+            onSuccess={ onImageSize(it.result.image.width, it.result.image.height) },
             imageLoader=vm.imageLoader,contentDescription=if(full) "当前图片大图" else "媒体缩略图",
             contentScale=if(full) ContentScale.Fit else ContentScale.Crop,modifier=modifier,
             loading={ Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) } },
@@ -81,10 +92,13 @@ fun PreviewDialog(vm: ProbeViewModel, state: ReaderState, saveStill: (String) ->
     val pager=rememberPagerState(initialPage=index,pageCount={post.media.size})
     var zoomed by remember {mutableStateOf(false)}
     val media=post.media[pager.currentPage]
+    var toolsVisible by remember { mutableStateOf(true) }
+    var resetZoom by remember { mutableIntStateOf(0) }
     val showSwipeHint by vm.previewSwipeHint.collectAsStateWithLifecycle()
     DisposableEffect(Unit) { onDispose { if(post.media.size>1) vm.dismissPreviewHint() } }
     LaunchedEffect(pager.currentPage) {
         zoomed=false
+        toolsVisible=true
         vm.preview(post.media[pager.currentPage].id)
     }
     Dialog(onDismissRequest={vm.preview(null)},properties=DialogProperties(usePlatformDefaultWidth=false,decorFitsSystemWindows=false)) {
@@ -98,54 +112,113 @@ fun PreviewDialog(vm: ProbeViewModel, state: ReaderState, saveStill: (String) ->
             }
         }
         Surface(color=MaterialTheme.colorScheme.background,contentColor=MaterialTheme.colorScheme.onBackground) {
-            Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().padding(12.dp),
-                verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                    // 左内边距移到右侧，让关闭文字与媒体视口左边缘对齐，保留点击范围及序号位置。
-                    TextButton(onClick={vm.preview(null)},modifier=Modifier.heightIn(min=56.dp),contentPadding=PaddingValues(start=0.dp,end=36.dp,top=10.dp,bottom=10.dp)) {
-                        Text("关闭",fontSize=20.sp)
-                    }
-                    Text("${pager.currentPage+1} / ${post.media.size}",Modifier.weight(1f),color=MaterialTheme.colorScheme.onBackground)
-                }
-                HorizontalPager(state=pager,userScrollEnabled=!zoomed,modifier=Modifier.weight(1f).fillMaxWidth(),
+            BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
+                val toolbarLimit = maxHeight * .45f
+                val density = LocalDensity.current
+                var topToolbarHeight by remember { mutableIntStateOf(0) }
+                var bottomToolbarHeight by remember { mutableIntStateOf(0) }
+                val navigationBottom = WindowInsets.navigationBars.getBottom(density)
+                val hasBottomToolbar = media.kind==MediaKind.LIVE_PHOTO || zoomed || (post.media.size>1 && showSwipeHint)
+                // 图片占用完整视口；工具栏单独绘制，缩放不会改变其位置和尺寸。
+                HorizontalPager(state=pager, userScrollEnabled=!zoomed, modifier=Modifier.fillMaxSize(),
                     key={post.media[it].id}) { page ->
                     val item=post.media[page]
-                    if(item.kind==MediaKind.VIDEO) VideoPreview(item,vm,Modifier.fillMaxSize(),visible=page==pager.currentPage && !pager.isScrollInProgress)
-                    else ZoomableImage(item,vm,current=page==pager.currentPage,onZoomChanged={if(page==pager.currentPage) zoomed=it})
+                    if(item.kind==MediaKind.VIDEO) VideoPreview(item,vm,Modifier.fillMaxSize()
+                        .padding(top=with(density) {topToolbarHeight.toDp()},
+                            bottom=with(density) {if(hasBottomToolbar) bottomToolbarHeight.toDp() else navigationBottom.toDp()})
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+                        visible=page==pager.currentPage && !pager.isScrollInProgress)
+                    else ZoomableImage(item, vm, current=page==pager.currentPage, reset=resetZoom,
+                        onTap={ toolsVisible=!toolsVisible },
+                        onZoomChanged={ if(page==pager.currentPage) zoomed=it })
                 }
-                if (media.kind == MediaKind.LIVE_PHOTO) {
-                    Text("实况照片 · 当前预览静态画面", color = MaterialTheme.colorScheme.primary)
-                    TextButton(onClick = { saveStill(media.id) }, enabled = media.candidate != null) {
-                        Text("仅保存静态图片")
+                if(toolsVisible || media.kind==MediaKind.VIDEO) {
+                    Surface(Modifier.align(Alignment.TopCenter).fillMaxWidth().onSizeChanged {topToolbarHeight=it.height}, color=MaterialTheme.colorScheme.surface) {
+                        Row(Modifier.statusBarsPadding().padding(horizontal=12.dp, vertical=4.dp),
+                            verticalAlignment=Alignment.CenterVertically) {
+                            FilledTonalButton(onClick={vm.preview(null)}) {
+                                Text("关闭")
+                            }
+                            Text("${pager.currentPage+1} / ${post.media.size}", Modifier.padding(start=16.dp),
+                                color=MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    if(hasBottomToolbar) {
+                        Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().onSizeChanged {bottomToolbarHeight=it.height}, color=MaterialTheme.colorScheme.surface) {
+                            Column(Modifier.heightIn(max=toolbarLimit).verticalScroll(rememberScrollState())
+                                .navigationBarsPadding().padding(12.dp), verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                                if(media.kind==MediaKind.LIVE_PHOTO) {
+                                    Text("实况照片 · 当前显示静态画面", color=MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style=MaterialTheme.typography.bodySmall)
+                                }
+                                PreviewActions(zoomed=zoomed, live=media.kind==MediaKind.LIVE_PHOTO,
+                                    canSave=media.candidate!=null, onReset={resetZoom++}, onSave={saveStill(media.id)})
+                                if(post.media.size>1 && (zoomed || showSwipeHint)) {
+                                    Text(if(zoomed) "还原缩放后可切换" else "左右滑动切换",
+                                        style=MaterialTheme.typography.labelSmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
                     }
                 }
-                if(post.media.size>1 && (zoomed || showSwipeHint)) Text(if(zoomed) "还原缩放后可切换" else "左右滑动切换",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ZoomableImage(media: ProbeMedia, vm: ProbeViewModel, current: Boolean, onZoomChanged: (Boolean)->Unit) {
-    var zoom by remember {mutableFloatStateOf(1f)}
-    var offsetX by remember {mutableFloatStateOf(0f)}
-    var offsetY by remember {mutableFloatStateOf(0f)}
-    val notify by rememberUpdatedState(onZoomChanged)
-    LaunchedEffect(current) {if(!current) {zoom=1f;offsetX=0f;offsetY=0f}}
-    val gestures=rememberTransformableState {change,pan,_ ->
-        zoom=(zoom*change).coerceIn(1f,5f)
-        if(zoom<=1.01f) {zoom=1f;offsetX=0f;offsetY=0f}
-        else {offsetX=(offsetX+pan.x).coerceIn(-1600f,1600f);offsetY=(offsetY+pan.y).coerceIn(-1600f,1600f)}
-        notify(zoom>1f)
+private fun PreviewActions(zoomed: Boolean, live: Boolean, canSave: Boolean, onReset: () -> Unit, onSave: () -> Unit) {
+    FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+        if(live) Button(onClick=onSave, enabled=canSave) { Text("仅保存静态图片") }
+        if(zoomed) OutlinedButton(onClick=onReset) { Text("还原缩放") }
     }
-    Column(Modifier.fillMaxSize(),horizontalAlignment=Alignment.CenterHorizontally) {
-        // 原尺寸时把单指横滑交给 Pager，双指缩放和平移在图片组件处理。
-        Box(Modifier.weight(1f).fillMaxWidth().transformable(gestures,canPan={zoom>1f}),contentAlignment=Alignment.Center) {
-            NetworkImage(media.candidate?.url ?: media.preview?.url,vm,true,Modifier.fillMaxSize().graphicsLayer {
-                scaleX=zoom;scaleY=zoom;translationX=offsetX;translationY=offsetY
-            })
+}
+
+@Composable
+private fun ZoomableImage(media: ProbeMedia, vm: ProbeViewModel, current: Boolean, reset: Int,
+                          onTap: () -> Unit, onZoomChanged: (Boolean) -> Unit) {
+    var zoom by remember(media.id) { mutableFloatStateOf(1f) }
+    var offset by remember(media.id) { mutableStateOf(Offset.Zero) }
+    var viewport by remember { mutableStateOf(IntSize.Zero) }
+    var imageSize by remember(media.id) { mutableStateOf(IntSize.Zero) }
+    val notify by rememberUpdatedState(onZoomChanged)
+    val tap by rememberUpdatedState(onTap)
+    fun constrain(value: Offset, scale: Float): Offset {
+        val bounds = imagePanBounds(viewport.width, viewport.height, imageSize.width, imageSize.height, scale)
+        return Offset(value.x.coerceIn(-bounds.first, bounds.first), value.y.coerceIn(-bounds.second, bounds.second))
+    }
+    LaunchedEffect(current, reset) {
+        zoom=1f
+        offset=Offset.Zero
+        if(current) notify(false)
+    }
+    LaunchedEffect(viewport, imageSize) { offset=constrain(offset, zoom) }
+    val gestures=rememberTransformableState { change, pan, _ ->
+        if(imageSize.width>0 && imageSize.height>0) {
+            zoom=(zoom*change).coerceIn(1f,5f)
+            if(zoom<=1.01f) zoom=1f
+            offset=constrain(offset+pan, zoom)
+            notify(zoom>1f)
         }
-        TextButton(onClick={zoom=1f;offsetX=0f;offsetY=0f;notify(false)}) {Text("还原缩放")}
+    }
+    // 原始比例由 Pager 处理横滑，放大后由图片处理平移。双击以点击位置为中心放大。
+    Box(Modifier.fillMaxSize().clipToBounds().onSizeChanged { viewport=it }
+        .pointerInput(media.id) {
+            detectTapGestures(onTap={tap()}, onDoubleTap={ position ->
+                if(imageSize.width>0 && imageSize.height>0) {
+                    val next=if(zoom>1f) 1f else 2.5f
+                    val center=Offset(viewport.width/2f, viewport.height/2f)
+                    offset=if(next==1f) Offset.Zero else constrain((center-position)*(next-1f),next)
+                    zoom=next
+                    notify(zoom>1f)
+                }
+            })
+        }.transformable(gestures, canPan={zoom>1f}), contentAlignment=Alignment.Center) {
+        NetworkImage(media.candidate?.url ?: media.preview?.url, vm, true,
+            Modifier.fillMaxSize().graphicsLayer {
+                scaleX=zoom; scaleY=zoom; translationX=offset.x; translationY=offset.y
+            }, onImageSize={width,height -> imageSize=IntSize(width,height)})
     }
 }
 

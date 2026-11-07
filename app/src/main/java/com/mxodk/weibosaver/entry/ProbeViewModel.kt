@@ -68,12 +68,28 @@ class ProbeViewModel(application: Application): AndroidViewModel(application) {
         .diskCache(null).build()
     private val coordinator=DownloadCoordinator.get(application)
     val downloads=coordinator.state
+    // 隐藏只影响摘要展示，协调器继续保留真实结果和失败重试快照。
+    private val mutableHiddenDownloadBatch = MutableStateFlow<String?>(null)
+    val hiddenDownloadBatch = mutableHiddenDownloadBatch.asStateFlow()
+    fun dismissDownloadSummary() {
+        val current = downloads.value
+        if (!current.active) mutableHiddenDownloadBatch.value = current.batch
+    }
+    fun revealDownloadSummary() { mutableHiddenDownloadBatch.value = null }
     init {
         // 订阅现有保存任务；重建页面不恢复或重复派发。
         controller.state.onEach { next -> mutableReader.update { it.receive(next) } }.launchIn(viewModelScope)
     }
     fun editInput(input: String) = controller.edit(input)
-    fun fetch() = controller.submit(controller.state.value.input)
+    fun fetch() {
+        val input = controller.state.value.input
+        try {
+            // 只做本地输入校验；无效输入仍由解析控制器给出原有错误。
+            LinkResolver.identify(input)
+            dismissDownloadSummary()
+        } catch (_: ProbeFailure) { }
+        controller.submit(input)
+    }
     fun cancel() = controller.cancel()
     fun toggle(id: String) { mutableReader.update { it.toggle(id) } }
     fun setSelected(id: String, checked: Boolean) { mutableReader.update { it.setSelected(id,checked) } }
