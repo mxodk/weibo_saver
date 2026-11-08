@@ -44,4 +44,4 @@ chmod +x gradlew
 
 可将 APK 传到手机，允许对应来源安装后打开。应用 ID 为 `com.mxodk.weibosaver`，启动器显示名称为“微博下载器”。不同电脑的默认开发签名可能不同，不能保证覆盖安装；卸载会丢失应用设置和授权，请先确认已有安装及数据需求。
 
-当前源码构建为 `1.1.1`，版本号 20，最低 API 31、目标 API 36。Debug APK 用于开发验证；正式密钥不随仓库分发。执行 `:app:assembleRelease` 可生成 `app/build/outputs/apk/release/app-release-unsigned.apk`，需使用构建者自己的密钥签名后才能安装。本地构建和单元测试通过不代表各系统的后台、媒体库或兼容性均已验收。已知限制见 [README.md](README.md)。
+当前源码构建为 `1.1.2`，版本号 21，最低 API 31、目标 API 36。Debug APK 用于开发验证；正式密钥不随仓库分发。执行 `:app:assembleRelease` 可生成 `app/build/outputs/apk/release/app-release-unsigned.apk`，需使用构建者自己的密钥签名后才能安装。本地构建和单元测试通过不代表各系统的后台、媒体库或兼容性均已验收。已知限制见 [README.md](README.md)。

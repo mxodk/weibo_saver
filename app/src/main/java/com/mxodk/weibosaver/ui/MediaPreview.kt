@@ -9,6 +9,10 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.Role
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.rememberScrollState
@@ -65,7 +69,8 @@ private fun lifecycleStarted(): Boolean {
 
 @Composable
 fun NetworkImage(url: String?, vm: ProbeViewModel, full: Boolean, modifier: Modifier = Modifier,
-                 onImageSize: (Int, Int) -> Unit = { _, _ -> }) {
+                 onImageSize: (Int, Int) -> Unit = { _, _ -> }, fallbackUrl: String? = null,
+                 fit: Boolean = full) {
     var attempt by remember(url) { mutableIntStateOf(0) }
     val context = LocalContext.current
     if(!lifecycleStarted()) { Box(modifier);return }
@@ -74,9 +79,12 @@ fun NetworkImage(url: String?, vm: ProbeViewModel, full: Boolean, modifier: Modi
         SubcomposeAsyncImage(model=ImageRequest.Builder(context).data(url).size(if(full) 2048 else 384).build(),
             onSuccess={ onImageSize(it.result.image.width, it.result.image.height) },
             imageLoader=vm.imageLoader,contentDescription=if(full) "当前图片大图" else "媒体缩略图",
-            contentScale=if(full) ContentScale.Fit else ContentScale.Crop,modifier=modifier,
-            loading={ Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) } },
-            error={ Column(Modifier.fillMaxSize().padding(4.dp),horizontalAlignment=Alignment.CenterHorizontally,
+            contentScale=if(fit) ContentScale.Fit else ContentScale.Crop,modifier=modifier,
+            loading={ if (fallbackUrl != null) NetworkImage(fallbackUrl, vm, false, Modifier.fillMaxSize(), fit = true)
+                else Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) } },
+            error={ if (fallbackUrl != null) NetworkImage(fallbackUrl, vm, false, Modifier.fillMaxSize(),
+                    onImageSize = onImageSize, fit = true)
+                else Column(Modifier.fillMaxSize().padding(4.dp),horizontalAlignment=Alignment.CenterHorizontally,
                 verticalArrangement=Arrangement.Center) {
                 Text("图片加载失败",color=MaterialTheme.colorScheme.onSurface,style=MaterialTheme.typography.labelSmall)
                 FilledTonalButton(onClick={attempt++}) { Text("重新加载") }
@@ -92,6 +100,12 @@ fun PreviewDialog(vm: ProbeViewModel, state: ReaderState, saveStill: (String) ->
     val pager=rememberPagerState(initialPage=index,pageCount={post.media.size})
     var zoomed by remember {mutableStateOf(false)}
     val media=post.media[pager.currentPage]
+    val settledMedia = post.media[pager.settledPage]
+    val active = lifecycleStarted()
+    val motionUrl = settledMedia.liveMotion?.url
+    var motionState by remember(state.parse.requestId, settledMedia.id, motionUrl) {
+        mutableStateOf(MotionState.LOADING)
+    }
     var toolsVisible by remember { mutableStateOf(true) }
     var resetZoom by remember { mutableIntStateOf(0) }
     val showSwipeHint by vm.previewSwipeHint.collectAsStateWithLifecycle()
@@ -118,19 +132,53 @@ fun PreviewDialog(vm: ProbeViewModel, state: ReaderState, saveStill: (String) ->
                 var topToolbarHeight by remember { mutableIntStateOf(0) }
                 var bottomToolbarHeight by remember { mutableIntStateOf(0) }
                 val navigationBottom = WindowInsets.navigationBars.getBottom(density)
-                val hasBottomToolbar = media.kind==MediaKind.LIVE_PHOTO || zoomed || (post.media.size>1 && showSwipeHint)
+                // 实况底栏和「播放」共用固定预留区，工具栏显隐时按钮位置不变。
+                val liveToolbarSpace = minOf(toolbarLimit,
+                    104.dp * density.fontScale.coerceAtLeast(1f) + with(density) { navigationBottom.toDp() })
+                val showPageHint = post.media.size > 1 && showSwipeHint && !zoomed
+                val hasBottomToolbar = media.kind == MediaKind.LIVE_PHOTO || zoomed || showPageHint
                 // 图片占用完整视口；工具栏单独绘制，缩放不会改变其位置和尺寸。
                 HorizontalPager(state=pager, userScrollEnabled=!zoomed, modifier=Modifier.fillMaxSize(),
                     key={post.media[it].id}) { page ->
                     val item=post.media[page]
-                    if(item.kind==MediaKind.VIDEO) VideoPreview(item,vm,Modifier.fillMaxSize()
+                    if (page != pager.settledPage) {
+                        val thumbnail = item.preview?.url ?: item.candidate?.url?.takeIf { item.kind != MediaKind.VIDEO }
+                        NetworkImage(thumbnail, vm, false, Modifier.fillMaxSize(), fit = true)
+                    } else if(item.kind==MediaKind.VIDEO) VideoPreview(item,vm,Modifier.fillMaxSize()
                         .padding(top=with(density) {topToolbarHeight.toDp()},
                             bottom=with(density) {if(hasBottomToolbar) bottomToolbarHeight.toDp() else navigationBottom.toDp()})
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                         visible=page==pager.currentPage && !pager.isScrollInProgress)
-                    else ZoomableImage(item, vm, current=page==pager.currentPage, reset=resetZoom,
-                        onTap={ toolsVisible=!toolsVisible },
-                        onZoomChanged={ if(page==pager.currentPage) zoomed=it })
+                    else {
+                        val showMotion = item.kind == MediaKind.LIVE_PHOTO && motionUrl != null && active &&
+                            !pager.isScrollInProgress && motionState.isPlayingAttempt
+                        ZoomableImage(item, vm, current=page==pager.currentPage, reset=resetZoom,
+                            onTap={ toolsVisible=!toolsVisible },
+                            onZoomChanged={ if(page==pager.currentPage) zoomed=it }) { frame ->
+                            if (showMotion) {
+                                LiveMotionPreview(motionUrl, vm, frame, onState = { motionState = it })
+                            }
+                        }
+                    }
+                }
+                if (active && media.kind == MediaKind.LIVE_PHOTO && media.id == settledMedia.id &&
+                    !pager.isScrollInProgress && motionState == MotionState.ENDED) {
+                    val rightInset = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+                    Box(Modifier.align(Alignment.BottomEnd).windowInsetsPadding(rightInset)
+                        .padding(end = 12.dp, bottom = liveToolbarSpace + 12.dp)) {
+                        // 缩小可见底色，保留足够的点击范围。
+                        Box(Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clickable(role = Role.Button) { motionState = MotionState.LOADING },
+                            contentAlignment = Alignment.BottomEnd) {
+                            Row(Modifier.background(Color(0x9D2F3945), CircleShape)
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                LivePhotoGlyph(Modifier.size(16.dp))
+                                Text("播放", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
                 }
                 if(toolsVisible || media.kind==MediaKind.VIDEO) {
                     Surface(Modifier.align(Alignment.TopCenter).fillMaxWidth().onSizeChanged {topToolbarHeight=it.height}, color=MaterialTheme.colorScheme.surface) {
@@ -145,16 +193,27 @@ fun PreviewDialog(vm: ProbeViewModel, state: ReaderState, saveStill: (String) ->
                     }
                     if(hasBottomToolbar) {
                         Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().onSizeChanged {bottomToolbarHeight=it.height}, color=MaterialTheme.colorScheme.surface) {
-                            Column(Modifier.heightIn(max=toolbarLimit).verticalScroll(rememberScrollState())
+                            val bottomLimit = if (media.kind == MediaKind.LIVE_PHOTO) liveToolbarSpace else toolbarLimit
+                            Column(Modifier.heightIn(max=bottomLimit).verticalScroll(rememberScrollState())
                                 .navigationBarsPadding().padding(12.dp), verticalArrangement=Arrangement.spacedBy(8.dp)) {
                                 if(media.kind==MediaKind.LIVE_PHOTO) {
-                                    Text("实况照片 · 当前显示静态画面", color=MaterialTheme.colorScheme.onSurfaceVariant,
-                                        style=MaterialTheme.typography.bodySmall)
+                                    val message = when {
+                                        media.id != settledMedia.id -> null
+                                        motionUrl == null -> "实况照片缺少动态资源"
+                                        motionState == MotionState.LOADING -> "正在加载实况"
+                                        motionState == MotionState.FAILED -> "实况加载失败"
+                                        else -> null
+                                    }
+                                    if (message != null) Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall)
                                 }
                                 PreviewActions(zoomed=zoomed, live=media.kind==MediaKind.LIVE_PHOTO,
-                                    canSave=media.candidate!=null, onReset={resetZoom++}, onSave={saveStill(media.id)})
-                                if(post.media.size>1 && (zoomed || showSwipeHint)) {
-                                    Text(if(zoomed) "还原缩放后可切换" else "左右滑动切换",
+                                    canSave=media.candidate!=null, onReset={resetZoom++}, onSave={saveStill(media.id)},
+                                    canRetry = media.kind == MediaKind.LIVE_PHOTO && media.id == settledMedia.id &&
+                                        motionState == MotionState.FAILED && !pager.isScrollInProgress,
+                                    onRetry = { motionState = MotionState.LOADING })
+                                if (showPageHint) {
+                                    Text("左右滑动切换",
                                         style=MaterialTheme.typography.labelSmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
@@ -168,8 +227,10 @@ fun PreviewDialog(vm: ProbeViewModel, state: ReaderState, saveStill: (String) ->
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PreviewActions(zoomed: Boolean, live: Boolean, canSave: Boolean, onReset: () -> Unit, onSave: () -> Unit) {
+private fun PreviewActions(zoomed: Boolean, live: Boolean, canSave: Boolean, onReset: () -> Unit, onSave: () -> Unit,
+                           canRetry: Boolean, onRetry: () -> Unit) {
     FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+        if (canRetry) OutlinedButton(onClick = onRetry) { Text("重新加载") }
         if(live) Button(onClick=onSave, enabled=canSave) { Text("仅保存静态图片") }
         if(zoomed) OutlinedButton(onClick=onReset) { Text("还原缩放") }
     }
@@ -177,7 +238,8 @@ private fun PreviewActions(zoomed: Boolean, live: Boolean, canSave: Boolean, onR
 
 @Composable
 private fun ZoomableImage(media: ProbeMedia, vm: ProbeViewModel, current: Boolean, reset: Int,
-                          onTap: () -> Unit, onZoomChanged: (Boolean) -> Unit) {
+                          onTap: () -> Unit, onZoomChanged: (Boolean) -> Unit,
+                          motion: @Composable (Modifier) -> Unit) {
     var zoom by remember(media.id) { mutableFloatStateOf(1f) }
     var offset by remember(media.id) { mutableStateOf(Offset.Zero) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
@@ -215,10 +277,25 @@ private fun ZoomableImage(media: ProbeMedia, vm: ProbeViewModel, current: Boolea
                 }
             })
         }.transformable(gestures, canPan={zoom>1f}), contentAlignment=Alignment.Center) {
-        NetworkImage(media.candidate?.url ?: media.preview?.url, vm, true,
-            Modifier.fillMaxSize().graphicsLayer {
-                scaleX=zoom; scaleY=zoom; translationX=offset.x; translationY=offset.y
-            }, onImageSize={width,height -> imageSize=IntSize(width,height)})
+        // 静态图和动态画面共用缩放层，切换画面时保留同一视角。
+        BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer {
+            scaleX = zoom
+            scaleY = zoom
+            translationX = offset.x
+            translationY = offset.y
+        }, contentAlignment = Alignment.Center) {
+            NetworkImage(media.candidate?.url ?: media.preview?.url, vm, true,
+                Modifier.fillMaxSize(),
+                onImageSize = { width, height -> imageSize = IntSize(width, height) },
+                fallbackUrl = (media.preview?.url ?: media.candidate?.url)
+                    ?.takeIf { media.kind == MediaKind.LIVE_PHOTO })
+            // 封面尺寸未知时只显示等比占位，避免视频先填满视口再缩回。
+            if (imageSize.width > 0 && imageSize.height > 0) {
+                val ratio = imageSize.width.toFloat() / imageSize.height
+                val width = minOf(maxWidth, maxHeight * ratio)
+                motion(Modifier.size(width, width / ratio))
+            }
+        }
     }
 }
 
@@ -246,10 +323,7 @@ private fun VideoPreview(media: ProbeMedia, vm: ProbeViewModel, modifier: Modifi
             // 只有可见的当前视频持有播放器；切后台、关闭和切项均释放连接与解码器。
             val player=remember {
                 ExoPlayer.Builder(context).build().apply {
-                    val source=ProgressiveMediaSource.Factory(OkHttpDataSource.Factory(vm.videoClient))
-                        .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(0))
-                        .createMediaSource(MediaItem.fromUri(url))
-                    setMediaSource(source);seekTo(position);playWhenReady=false
+                    setMediaSource(previewSource(url, vm));seekTo(position);playWhenReady=false
                     setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT,true)
                     addListener(object:Player.Listener {
                         override fun onPlayerError(error: PlaybackException) { failed=true }
@@ -263,4 +337,63 @@ private fun VideoPreview(media: ProbeMedia, vm: ProbeViewModel, modifier: Modifi
         } else if(!visible) Box(Modifier.fillMaxSize())
         else Text("返回应用后可继续预览")
     }
+}
+
+private enum class MotionState {
+    LOADING, PLAYING, ENDED, FAILED;
+
+    val isPlayingAttempt: Boolean get() = this == LOADING || this == PLAYING
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+private fun previewSource(url: String, vm: ProbeViewModel) =
+    ProgressiveMediaSource.Factory(OkHttpDataSource.Factory(vm.videoClient))
+        .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(0))
+        .createMediaSource(MediaItem.fromUri(url))
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun LiveMotionPreview(url: String, vm: ProbeViewModel, modifier: Modifier, onState: (MotionState) -> Unit) {
+    val context = LocalContext.current
+    val reportState by rememberUpdatedState(onState)
+    var frameReady by remember(url) { mutableStateOf(false) }
+    val player = remember(url, vm) { ExoPlayer.Builder(context).build() }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                frameReady = true
+                reportState(MotionState.PLAYING)
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) reportState(MotionState.ENDED)
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                reportState(MotionState.FAILED)
+            }
+        }
+        player.addListener(listener)
+        player.setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, true)
+        player.setMediaSource(previewSource(url, vm))
+        player.playWhenReady = true
+        player.prepare()
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+    // 静态图保留在同一显示区域底层，避免首帧尚未合成到屏幕时露出背景。
+    AndroidView(factory = {
+        (LayoutInflater.from(it).inflate(R.layout.video_player, null) as PlayerView).apply {
+            useController = false
+            setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+            isClickable = false
+        }
+    }, update = {
+        it.alpha = if (frameReady) 1f else 0f
+        it.player = player
+    }, modifier = modifier.clipToBounds(), onRelease = { it.player = null })
 }

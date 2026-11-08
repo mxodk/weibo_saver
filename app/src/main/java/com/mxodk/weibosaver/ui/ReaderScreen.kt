@@ -37,6 +37,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -264,7 +270,22 @@ private fun MediaTile(vm: ProbeViewModel, media: ProbeMedia, selected: Boolean, 
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
             .onGloballyPositioned { if(media.candidate != null) bounds(media.id,it.boundsInRoot()) }.clickable {vm.preview(media.id)}) {
             NetworkImage(media.preview?.url ?: media.candidate?.takeIf {media.kind != MediaKind.VIDEO}?.url,vm,false,Modifier.fillMaxSize())
-            if(media.kind == MediaKind.VIDEO) Text("▶",fontSize=26.sp,color=Color.White,modifier=Modifier.align(Alignment.Center).background(Color.Black.copy(alpha=.45f),CircleShape).padding(8.dp))
+            if (media.kind == MediaKind.VIDEO) {
+                Canvas(Modifier.align(Alignment.Center).size(44.dp)
+                    .background(Color.Black.copy(alpha = .45f), CircleShape)
+                    .semantics { contentDescription = "视频" }) {
+                    val triangle = Path().apply {
+                        moveTo(size.width * .38f, size.height * .29f)
+                        lineTo(size.width * .38f, size.height * .71f)
+                        lineTo(size.width * .72f, size.height * .5f)
+                        close()
+                    }
+                    drawPath(triangle, Color.White)
+                }
+            }
+            if (media.kind == MediaKind.LIVE_PHOTO) {
+                LivePhotoBadge(Modifier.align(Alignment.TopStart).padding(4.dp))
+            }
             // 视觉标记缩小，点击区域仍保留 48dp，避免大圆遮挡缩略图。
             Box(Modifier.align(Alignment.TopEnd).size(48.dp).toggleable(value=selected,enabled=media.candidate != null,
                 role=Role.Checkbox,onValueChange={vm.setSelected(media.id,it)}),contentAlignment=Alignment.Center) {
@@ -279,10 +300,30 @@ private fun MediaTile(vm: ProbeViewModel, media: ProbeMedia, selected: Boolean, 
                 }
             }
         }
-        Text(when(media.kind) {MediaKind.IMAGE -> "图片";MediaKind.VIDEO -> "视频";MediaKind.LIVE_PHOTO -> if (media.liveMotion == null) "实况 · 缺动态" else "实况"},
-            fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
+        if (media.kind == MediaKind.LIVE_PHOTO && media.liveMotion == null) {
+            Text("缺动态", fontSize = 11.sp)
+        }
         media.durationSeconds?.let { seconds -> Text("${seconds / 60}:${(seconds % 60).toString().padStart(2,'0')}",fontSize=11.sp) }
         if(media.candidate == null) Text("暂不可保存",fontSize=11.sp,color=MaterialTheme.colorScheme.error)
     }
 }
 
+
+@Composable
+private fun LivePhotoBadge(modifier: Modifier) {
+    LivePhotoGlyph(modifier.size(24.dp).background(Color(0x9D2F3945), CircleShape)
+        .semantics { contentDescription = "实况照片" })
+}
+
+@Composable
+internal fun LivePhotoGlyph(modifier: Modifier) {
+    Canvas(modifier) {
+        // 按确认的预览图绘制圆点和两段圆头弧线。
+        val inset = Offset(size.width * .245f, size.height * .245f)
+        val arcSize = Size(size.width * .51f, size.height * .51f)
+        val stroke = Stroke(width = size.width * .062f, cap = StrokeCap.Round)
+        drawCircle(Color.White, radius = size.width * .098f)
+        drawArc(Color.White, -150f, 165f, false, inset, arcSize, style = stroke)
+        drawArc(Color.White, 55f, 115f, false, inset, arcSize, style = stroke)
+    }
+}

@@ -13,14 +13,18 @@ android {
         // Android 12 是最低支持目标，不能随编译 SDK 升级而提高。
         minSdk = 31
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.1.1"
+        versionCode = 21
+        versionName = "1.1.2"
         manifestPlaceholders["appLabel"] = "@string/app_name"
     }
     buildTypes {
         debug {
             // 阶段验收包单独安装，避免与正式签名版本冲突。
-            if (providers.gradleProperty("p9TestApk").orNull == "true") {
+            if (providers.gradleProperty("p10TestApk").orNull == "true") {
+                applicationIdSuffix = ".p10test"
+                versionNameSuffix = "-p10-test-r4"
+                manifestPlaceholders["appLabel"] = "微博下载器 P10 测试"
+            } else if (providers.gradleProperty("p9TestApk").orNull == "true") {
                 applicationIdSuffix = ".p9test"
                 versionNameSuffix = "-p9-test-r5"
                 manifestPlaceholders["appLabel"] = "微博下载器 P9 测试"
