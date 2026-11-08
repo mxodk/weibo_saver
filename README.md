@@ -2,7 +2,7 @@
 
 Android 微博图片、视频和 Live Photo 下载工具。在应用中粘贴一条微博链接，解析当前帖正文与媒体，预览后选择保存。
 
-当前已发布版本为 `1.1.1`。下文介绍当前源码的功能。
+当前源码版本为 `1.1.2`。APK 下载见 [GitHub Releases](https://github.com/mxodk/weibo_saver/releases)。
 
 ## 功能
 
